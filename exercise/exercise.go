@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"encoding/binary"
-	"bytes"
 
 	"github.com/miekg/pkcs11"
 	"github.com/spf13/pflag"
@@ -87,7 +86,7 @@ func main() {
 
 	genRsa := pflag.Bool("gen-rsa", false, "Generate rsa key")
 	labelName := pflag.String("label", "", "Label name")
-	objId := pflag.Uint16("id", 0, "Object Id")
+	objId := pflag.Int("id", 0, "Object Id")
 
 	pflag.Parse()
 
@@ -197,31 +196,10 @@ func main() {
 	}
 }
 	if *genRsa && len(*labelName) > 0 && *objId > 0 {
-		buf := new(bytes.Buffer)
-		var num uint16 = *objId
-		err := binary.Write(buf, binary.LittleEndian, num)
-		if err != nil {
-			log.Fatal(err)
+		mechTemplate := []*pkcs11.Mechanism{
+			pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_KEY_PAIR_GEN, nil),
 		}
-		id := buf.Bytes()
 
-		buf = new(bytes.Buffer)
-		num = 2048
-		err = binary.Write(buf, binary.LittleEndian, num)
-		if err != nil {
-			log.Fatal(err)
-		}
-		ksize := buf.Bytes()
-
-		buf = new(bytes.Buffer)
-		var exp uint32 = 65537
-		err = binary.Write(buf, binary.LittleEndian, exp)
-		if err != nil {
-			log.Fatal(err)
-		}
-		expo := buf.Bytes()
-
-		fmt.Println("1")
 		rsaPubkeyTemplate := []*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
 			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
@@ -230,13 +208,11 @@ func main() {
 			pkcs11.NewAttribute(pkcs11.CKA_VERIFY, true),
 			pkcs11.NewAttribute(pkcs11.CKA_ENCRYPT, true),
 			pkcs11.NewAttribute(pkcs11.CKA_WRAP, true),
-			pkcs11.NewAttribute(pkcs11.CKA_MODULUS_BITS, ksize),
-			pkcs11.NewAttribute(pkcs11.CKA_PUBLIC_EXPONENT, expo),
+			pkcs11.NewAttribute(pkcs11.CKA_MODULUS_BITS, 2048),
+			pkcs11.NewAttribute(pkcs11.CKA_PUBLIC_EXPONENT, []byte{1, 0, 1}),
 			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-			pkcs11.NewAttribute(pkcs11.CKA_ID, id),
+			pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
 		}
-
-		fmt.Println("2")
 
 		rsaPrivkeyTemplate := []*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
@@ -248,34 +224,19 @@ func main() {
 			pkcs11.NewAttribute(pkcs11.CKA_DECRYPT, true),
 			pkcs11.NewAttribute(pkcs11.CKA_UNWRAP, true),
 			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-			pkcs11.NewAttribute(pkcs11.CKA_ID, id),
+			pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
 		}
 
-		fmt.Println("3")
+		rsaPubkey, rsaPrivkey, err := p.GenerateKeyPair(session, mechTemplate, rsaPubkeyTemplate, rsaPrivkeyTemplate)
 
-		rsaPubkey, err := p.CreateObject(session, rsaPubkeyTemplate)
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		fmt.Println("4")
-
-		rsaPrivkey, err := p.CreateObject(session, rsaPrivkeyTemplate)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		fmt.Println("5")
-
-		baseTemplate := []*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
 			pkcs11.NewAttribute(pkcs11.CKA_LABEL, nil),
 			pkcs11.NewAttribute(pkcs11.CKA_CLASS, nil),
 			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, nil),
-			pkcs11.NewAttribute(pkcs11.CKA_MODULUS_BITS, nil),
 		}
-
-		fmt.Println("6")
 
                 pubAttr, err := p.GetAttributeValue(session, rsaPubkey, baseTemplate)
 		if err != nil {
@@ -286,7 +247,11 @@ func main() {
 	        fmt.Printf("    Label : %s\n", fmt.Sprintf("%s", pubAttr[1].Value))
 	        fmt.Printf("     Type : %s\n", ckohex(binary.LittleEndian.Uint16(pubAttr[2].Value)))
 	        fmt.Printf("  KeyType : %s\n", ckkhex(binary.LittleEndian.Uint16(pubAttr[3].Value)))
-		fmt.Println("  KeySize :", binary.LittleEndian.Uint16(pubAttr[4].Value))
+		pubkeySizeAttr, err := p.GetAttributeValue(session, rsaPubkey, []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_MODULUS_BITS, nil)})
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println("  KeySize :", binary.LittleEndian.Uint16(pubkeySizeAttr[0].Value))
 
                 privAttr, err := p.GetAttributeValue(session, rsaPrivkey, baseTemplate)
                 if err != nil {
@@ -297,6 +262,5 @@ func main() {
                 fmt.Printf("    Label : %s\n", fmt.Sprintf("%s", privAttr[1].Value))
                 fmt.Printf("     Type : %s\n", ckohex(binary.LittleEndian.Uint16(privAttr[2].Value)))
                 fmt.Printf("  KeyType : %s\n", ckkhex(binary.LittleEndian.Uint16(privAttr[3].Value)))
-                fmt.Println("  KeySize :", binary.LittleEndian.Uint16(privAttr[4].Value))
 	}
 }
