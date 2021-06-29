@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/base64"
 	"io/ioutil"
+	"crypto/rand"
 
 	"github.com/miekg/pkcs11"
 	"github.com/spf13/pflag"
@@ -47,6 +48,7 @@ func ckkhex(attrV uint16) string {
 }
 
 func main() {
+	//----------------------------------------- Get CONNECTION -----------------------------------------
 	libPath := os.Getenv("LIB")
 
 	p := pkcs11.New(libPath)
@@ -89,17 +91,27 @@ func main() {
 	fmt.Println("Info :", info)
 	fmt.Println()
 
-	//----------------------------------------- Print object option --------------------------------------------
+	//--------------------------------------------- FLAGs -------------------------------------------------
 	objList := pflag.Bool("list", false, "Print object list option : --list")
 
 	genRsa := pflag.Bool("gen-rsa", false, "Generate rsa key : --gen-rsa --label (key label) --id (id)")
 	labelName := pflag.String("label", "", "Label name : --label (key label)")
 	objId := pflag.Int("id", 0, "Object Id : --id (id)")
 
-	signRsa := pflag.Bool("sign-rsa", false, "Sign with rsa key : --sign-rsa --labal (key label) --data (filename)")
+	signRsa := pflag.Bool("sign-rsa", false, "Sign with rsa key : --sign-rsa --labal (key label) --data (aign filename)")
 	signData := pflag.String("data", "", "Input data : --data (filename)")
 
 	genAes := pflag.Bool("gen-aes", false, "Generate aes key : --gen-aes --label (key label) --id (id)")
+
+	encAes := pflag.Bool("encrypt-aes", false, "Encrypt with AES : --encrypt-aes --label (key label) --in (plain file name) --out (encrypt file name)")
+	decAes := pflag.Bool("decrypt-aes", false, "Decrypt with AES : --decrypt-aes --label (key label) --in (encrypt file name) --out (plain file name)")
+	inFile := pflag.String("in", "", "Input File : --in (filename)")
+	outFile := pflag.String("out", "", "Output File : --out (filename)")
+
+	genEc := pflag.Bool("gen-ec", false, "Generate ECDSA key : --gen-ec --curve (curve name) --label (key label)")
+	ecCurve := pflag.String("curve", "", "Types of EC curve : --curve (curve name)")
+
+	signEc := pflag.Bool("sign-ec", false, "Sign with ECDSA key : --sign-ec --label (key label) --data (sign filename)")
 
 	pflag.Parse()
 
@@ -322,5 +334,89 @@ func main() {
 		fmt.Printf("     Type : %s\n", ckohex(binary.LittleEndian.Uint16(attr[2].Value)))
 		fmt.Printf("  KeyType : %s\n", ckkhex(binary.LittleEndian.Uint16(attr[3].Value)))
 		fmt.Printf("  KeySize : %d\n", attr[4].Value[0])
+	}
+
+	//-------------------------------------------- Encrypt w/ AES --------------------------------------------------------
+	if *encAes && len(*labelName) > 0 && len(*inFile) > 0 && len(*outFile) > 0 {
+		//Get AES key
+		seckeyTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_SECRET_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_AES),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+		err := p.FindObjectsInit(session, seckeyTemp)
+		check(err)
+		sck, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
+
+		//Get INPUT file
+		dat, err := ioutil.ReadFile(*inFile)
+		check(err)
+
+		//Make IV
+		iv := make([]byte, 16)
+		_, err = rand.Read(iv)
+		check(err)
+
+		//Encrypt
+		err = p.EncryptInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_AES_CBC_PAD, iv)}, sck[0])
+		check(err)
+		cipher, err := p.Encrypt(session, dat)
+		check(err)
+		encrypted := append(iv, cipher...)
+
+		//Release OUTPUT file
+		err = ioutil.WriteFile(*outFile, encrypted, 0644)
+		check(err)
+		fmt.Println("ENCRYPT DONE")
+	}
+
+	//-------------------------------------------- Decrypt w/ AES --------------------------------------------------------
+	if *decAes && len(*labelName) > 0 && len(*inFile) > 0 && len(*outFile) > 0 {
+		//Get AES key
+                seckeyTemp := []*pkcs11.Attribute{
+                        pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_SECRET_KEY),
+                        pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_AES),
+                        pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+                }
+                err := p.FindObjectsInit(session, seckeyTemp)
+                check(err)
+                sck, _, err := p.FindObjects(session, 1)
+                check(err)
+                err = p.FindObjectsFinal(session)
+                check(err)
+
+		//Get INPUT file
+		encrypted, err := ioutil.ReadFile(*inFile)
+		check(err)
+		iv := encrypted[:16]
+		cipher := encrypted[16:]
+
+		//Decrypt
+		err = p.DecryptInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_AES_CBC_PAD, iv)}, sck[0])
+		check(err)
+		decrypted, err := p.Decrypt(session, cipher)
+		check(err)
+
+		//Release OUTPUT file
+		err = ioutil.WriteFile(*outFile, decrypted, 0644)
+		check(err)
+		fmt.Println("DECRYPT DONE")
+	}
+
+	//------------------------------------------- Generate ECDSA key ------------------------------------------------------
+	if *genEc && len(*labelName) > 0 && len(*ecCurve) > 0 {
+		fmt.Println(*labelName)
+		fmt.Println(*ecCurve)
+
+
+	}
+
+	//-------------------------------------------------- Sign w/ ECDSA ----------------------------------------------------
+	if *signEc && len(*labelName) > 0 && len(*signData) > 0 {
+		fmt.Println(*labelName)
+		fmt.Println(*signData)
 	}
 }
