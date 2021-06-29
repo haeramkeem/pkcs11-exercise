@@ -89,7 +89,7 @@ func main() {
 	fmt.Println("Info :", info)
 	fmt.Println()
 
-	//Print object option
+	//----------------------------------------- Print object option --------------------------------------------
 	objList := pflag.Bool("list", false, "Print object list option : --list")
 
 	genRsa := pflag.Bool("gen-rsa", false, "Generate rsa key : --gen-rsa --label (key label) --id (id)")
@@ -98,6 +98,8 @@ func main() {
 
 	signRsa := pflag.Bool("sign-rsa", false, "Sign with rsa key : --sign-rsa --labal (key label) --data (filename)")
 	signData := pflag.String("data", "", "Input data : --data (filename)")
+
+	genAes := pflag.Bool("gen-aes", false, "Generate aes key : --gen-aes --label (key label) --id (id)")
 
 	pflag.Parse()
 
@@ -283,5 +285,42 @@ func main() {
 		} else {
 			fmt.Println("Invalid Key Label")
 		}
+	}
+
+	//---------------------------------------------- Generate AES Key -------------------------------------------------
+	if *genAes && len(*labelName) > 0 && *objId > 0 {
+		seckeyTemplate := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_SECRET_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_AES),
+			pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
+			pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
+			pkcs11.NewAttribute(pkcs11.CKA_ENCRYPT, true),
+			pkcs11.NewAttribute(pkcs11.CKA_DECRYPT, true),
+			pkcs11.NewAttribute(pkcs11.CKA_WRAP, true),
+			pkcs11.NewAttribute(pkcs11.CKA_UNWRAP, true),
+			pkcs11.NewAttribute(pkcs11.CKA_VALUE_LEN, 32),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+			pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
+		}
+
+		seckey, err := p.GenerateKey(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_AES_KEY_GEN, nil)}, seckeyTemplate)
+		check(err)
+
+		showTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, nil),
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, nil),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, nil),
+			pkcs11.NewAttribute(pkcs11.CKA_VALUE_LEN, nil),
+		}
+
+		attr, err := p.GetAttributeValue(session, seckey, showTemp)
+		check(err)
+
+		fmt.Printf("Object ID : %d\n", attr[0].Value[0])
+		fmt.Printf("    Label : %s\n", fmt.Sprintf("%s", attr[1].Value))
+		fmt.Printf("     Type : %s\n", ckohex(binary.LittleEndian.Uint16(attr[2].Value)))
+		fmt.Printf("  KeyType : %s\n", ckkhex(binary.LittleEndian.Uint16(attr[3].Value)))
+		fmt.Printf("  KeySize : %d\n", attr[4].Value[0])
 	}
 }
