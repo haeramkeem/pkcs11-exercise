@@ -6,6 +6,7 @@ import (
 	"os"
 	"encoding/binary"
 	"encoding/base64"
+	"encoding/hex"
 	"io/ioutil"
 	"crypto/rand"
 
@@ -407,11 +408,38 @@ func main() {
 	}
 
 	//------------------------------------------- Generate ECDSA key ------------------------------------------------------
-	if *genEc && len(*labelName) > 0 && len(*ecCurve) > 0 {
+	if *genEc && len(*labelName) > 0 && len(*ecCurve) > 0 && *objId > 0 {
 		fmt.Println(*labelName)
 		fmt.Println(*ecCurve)
 
+		if *ecCurve == "secp256r1" {
+			ecparams := "06082A8648CE3D030107"
+			ecparamBin, err := hex.DecodeString(ecparams)
+			check(err)
 
+			ecPubTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, CKO_PUBLIC_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
+				pkcs11.NewAttribute(pkcs11.CKA_VERIFY, true),
+				pkcs11.NewAttribute(pkcs11.CKA_DERIVE, true),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+				pkcs11.NewAttribute(pkcs11.CKA_ID, *objId)
+				pkcs11.NewAttribute(pkcs11.CKA_EC_PARAMS, ecparamBin),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC)
+			}
+
+			ecPrivTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, CKO_PRIVATE_KEY),
+				pkca11.NewAttribute(pkcs11.CKA_TOKEN, true),
+				pkcs11.NewAttribute(pkcs11.CKA_PRIVATE, true),
+				pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
+				pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
+				pkcs11.NewAttribute(pkcs11.CKA_DERIVE, true),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+				pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC)
+			}
+		}
 	}
 
 	//-------------------------------------------------- Sign w/ ECDSA ----------------------------------------------------

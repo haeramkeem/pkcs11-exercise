@@ -2,28 +2,15 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"log"
-	"io"
+	"encoding/hex"
 )
 
 func main() {
-	f, err := os.Open("plain.txt")
+	a := "06082A8648CE3D030107"
+	bin, err := hex.DecodeString(a)
 	if err != nil {
 		log.Fatal(err)
 	}
-	var buf []byte
-	acc := make([]byte, 100)
-	for {
-		buf = make([]byte, 16)
-		count, err := f.Read(buf)
-		if err != nil && err != io.EOF {
-			log.Fatal(err)
-		}
-
-		if count <16 {
-			break
-		}
-	}
-	fmt.Println(string(acc))
+	fmt.Println(bin)
 }
