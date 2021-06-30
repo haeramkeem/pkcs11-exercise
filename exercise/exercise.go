@@ -409,36 +409,71 @@ func main() {
 
 	//------------------------------------------- Generate ECDSA key ------------------------------------------------------
 	if *genEc && len(*labelName) > 0 && len(*ecCurve) > 0 && *objId > 0 {
-		fmt.Println(*labelName)
-		fmt.Println(*ecCurve)
-
 		if *ecCurve == "secp256r1" {
 			ecparams := "06082A8648CE3D030107"
 			ecparamBin, err := hex.DecodeString(ecparams)
 			check(err)
 
 			ecPubTemp := []*pkcs11.Attribute{
-				pkcs11.NewAttribute(pkcs11.CKA_CLASS, CKO_PUBLIC_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
 				pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
 				pkcs11.NewAttribute(pkcs11.CKA_VERIFY, true),
 				pkcs11.NewAttribute(pkcs11.CKA_DERIVE, true),
 				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-				pkcs11.NewAttribute(pkcs11.CKA_ID, *objId)
+				pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
 				pkcs11.NewAttribute(pkcs11.CKA_EC_PARAMS, ecparamBin),
-				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC)
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
 			}
 
 			ecPrivTemp := []*pkcs11.Attribute{
-				pkcs11.NewAttribute(pkcs11.CKA_CLASS, CKO_PRIVATE_KEY),
-				pkca11.NewAttribute(pkcs11.CKA_TOKEN, true),
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
 				pkcs11.NewAttribute(pkcs11.CKA_PRIVATE, true),
 				pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
 				pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
 				pkcs11.NewAttribute(pkcs11.CKA_DERIVE, true),
 				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
 				pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
-				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC)
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
 			}
+
+			pbk, pvk, err := p.GenerateKeyPair(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_EC_KEY_PAIR_GEN, nil)}, ecPubTemp, ecPrivTemp)
+			check(err)
+
+			attrTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_ID, nil),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, nil),
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, nil),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, nil),
+			}
+
+			pubAttrTemp := append(attrTemp, pkcs11.NewAttribute(pkcs11.CKA_EC_POINT, nil))
+			pubAttr, err := p.GetAttributeValue(session, pbk, pubAttrTemp)
+			check(err)
+			fmt.Printf("Object ID : %d\n", pubAttr[0].Value[0])
+			fmt.Printf("    Label : %s\n", fmt.Sprintf("%s", pubAttr[1].Value))
+			fmt.Printf("     Type : %s\n", ckohex(binary.LittleEndian.Uint16(pubAttr[2].Value)))
+			fmt.Printf("  KeyType : %s\n", ckkhex(binary.LittleEndian.Uint16(pubAttr[3].Value)))
+
+			var ksize int
+                        size := len(pubAttr[4].Value)
+                        if (size - 2) <= 127 {
+                                ksize = (size - 3) * 4
+                        } else if (size - 3) <= 255 {
+                                ksize = (size - 4) * 4
+                        } else {
+                                ksize = (size - 5) * 4
+                        }
+                        fmt.Println("  KeySize :", ksize)
+
+			privAttr, err := p.GetAttributeValue(session, pvk, attrTemp)
+			check(err)
+			fmt.Printf("Object ID : %d\n", privAttr[0].Value[0])
+			fmt.Printf("    Label : %s\n", fmt.Sprintf("%s", privAttr[1].Value))
+			fmt.Printf("     Type : %s\n", ckohex(binary.LittleEndian.Uint16(privAttr[2].Value)))
+			fmt.Printf("  KeyType : %s\n", ckkhex(binary.LittleEndian.Uint16(privAttr[3].Value)))
+		} else {
+			fmt.Println("Curve Not Supported")
 		}
 	}
 
