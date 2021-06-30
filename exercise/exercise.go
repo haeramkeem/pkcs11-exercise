@@ -479,7 +479,34 @@ func main() {
 
 	//-------------------------------------------------- Sign w/ ECDSA ----------------------------------------------------
 	if *signEc && len(*labelName) > 0 && len(*signData) > 0 {
-		fmt.Println(*labelName)
-		fmt.Println(*signData)
+                //Read File
+                dat, err := ioutil.ReadFile(*signData)
+                check(err)
+
+                //Get Key
+                privTemplate := []*pkcs11.Attribute{
+                        pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+                        pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
+                        pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+                }
+                err = p.FindObjectsInit(session, privTemplate)
+                check(err)
+                pvk, _, err := p.FindObjects(session, 1)
+                check(err)
+                err = p.FindObjectsFinal(session)
+                check(err)
+
+                //Sign Data
+                if len(pvk) == 1 {
+                        err = p.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_ECDSA, nil)}, pvk[0])
+                        check(err)
+                        signed, err := p.Sign(session, dat)
+                        check(err)
+                        dst := base64.StdEncoding.EncodeToString(signed)
+                        fmt.Println("----- Signature -----")
+                        fmt.Println(dst)
+                } else {
+                        fmt.Println("Invalid Key Label")
+                }
 	}
 }
