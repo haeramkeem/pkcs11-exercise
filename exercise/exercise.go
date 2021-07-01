@@ -4,11 +4,16 @@ import (
 	"fmt"
 	"log"
 	"os"
+	//"bytes"
 	"encoding/binary"
 	"encoding/base64"
+	"encoding/pem"
 	"encoding/hex"
 	"io/ioutil"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"math/big"
 
 	"github.com/miekg/pkcs11"
 	"github.com/spf13/pflag"
@@ -81,17 +86,6 @@ func main() {
 	}
 	defer p.Logout(session)
 
-	info, err := p.GetInfo()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Module :", libPath)
-	fmt.Printf("Slot : 0x%x\n", slots[0])
-	fmt.Println("Login Session :", session, userpin)
-	fmt.Println("Info :", info)
-	fmt.Println()
-
 	//--------------------------------------------- FLAGs -------------------------------------------------
 	objList := pflag.Bool("list", false, "Print object list option : --list")
 
@@ -113,6 +107,8 @@ func main() {
 	ecCurve := pflag.String("curve", "", "Types of EC curve : --curve (curve name)")
 
 	signEc := pflag.Bool("sign-ec", false, "Sign with ECDSA key : --sign-ec --label (key label) --data (sign filename)")
+
+	getPubRsa := pflag.Bool("getpub-rsa", false, "Get RSA public key : --getpub-rsa --label (key label)")
 
 	pflag.Parse()
 
@@ -288,13 +284,12 @@ func main() {
 
 		//Sign Data
 		if len(pvk) == 1 {
-			err = p.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS, nil)}, pvk[0])
+			err = p.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_SHA1_RSA_PKCS, nil)}, pvk[0])
 			check(err)
 			signed, err := p.Sign(session, dat)
 			check(err)
-			dst := base64.StdEncoding.EncodeToString(signed)
-			fmt.Println("----- Signature -----")
-			fmt.Println(dst)
+			encodedStr := hex.EncodeToString(signed)
+			fmt.Println(encodedStr)
 		} else {
 			fmt.Println("Invalid Key Label")
 		}
@@ -508,5 +503,49 @@ func main() {
                 } else {
                         fmt.Println("Invalid Key Label")
                 }
+	}
+
+	//------------------------------------------------ Get RSA Public Key ------------------------------------------------
+	if *getPubRsa && len(*labelName) > 0 {
+		pubTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+
+		err := p.FindObjectsInit(session, pubTemp)
+		check(err)
+		pbk, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
+
+		if len(pbk) > 0 {
+			attrTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
+			}
+			attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
+			check(err)
+			//modulus := make([]byte, 256)
+			//for i, b := range attr[0].Value {
+			//	modulus[255 - i] = b
+			//}
+			//a := big.NewInt(0).SetBytes(modulus)
+			//fmt.Println(a.BitLen())
+			rsaPub := &rsa.PublicKey{
+				N: big.NewInt(0).SetBytes(attr[0].Value),
+				E: 65537,
+			}
+			rsaPubByte, err := x509.MarshalPKIXPublicKey(rsaPub)
+			check(err)
+			block := &pem.Block{
+				Type: "PUBLIC KEY",
+				Bytes: rsaPubByte,
+			}
+			err = pem.Encode(os.Stdout, block)
+			check(err)
+		} else {
+			fmt.Println("Invalid Key Label")
+		}
 	}
 }
