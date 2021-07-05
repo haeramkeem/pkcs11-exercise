@@ -4,15 +4,16 @@ import (
 	"fmt"
 	"log"
 	"os"
-	//"bytes"
 	"encoding/binary"
-	"encoding/base64"
 	"encoding/pem"
 	"encoding/hex"
+	"encoding/asn1"
 	"io/ioutil"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/elliptic"
+	"crypto/ecdsa"
 	"math/big"
 
 	"github.com/miekg/pkcs11"
@@ -51,6 +52,26 @@ func ckkhex(attrV uint16) string {
 		default :
 			return "idonno"
 	}
+}
+
+func getRawValue(data []byte) asn1.RawValue {
+	if data[0] > 127 {
+		data = append([]byte{0}, data...)
+	}
+
+	return asn1.RawValue{
+		Class: asn1.ClassUniversal,
+		Tag: asn1.TagInteger,
+		IsCompound: false,
+		Bytes: data,
+	}
+}
+
+func getRS(data []byte) []byte {
+	if data[0] == 0 && data[1] > 127 {
+		data = data[1:]
+	}
+	return data
 }
 
 func main() {
@@ -109,6 +130,13 @@ func main() {
 	signEc := pflag.Bool("sign-ec", false, "Sign with ECDSA key : --sign-ec --label (key label) --data (sign filename)")
 
 	getPubRsa := pflag.Bool("getpub-rsa", false, "Get RSA public key : --getpub-rsa --label (key label)")
+
+	getPubEc := pflag.Bool("getpub-ec", false, "Get ECDSA key : --getpub-ec --label (key label)")
+
+	opensslSigFormat := pflag.Bool("sign-format-openssl", false, "Convert sign data to asn1.sequence : --sign-format-openssl")
+
+	verifyEc := pflag.Bool("verify-ec", false, "Verify signature by ECDSA key : --verify-ec --label (key label) --data (digested data) --sig (sig file)")
+	sigFile := pflag.String("sig", "", "Input signature file : --sig (signature file)")
 
 	pflag.Parse()
 
@@ -478,6 +506,12 @@ func main() {
                 dat, err := ioutil.ReadFile(*signData)
                 check(err)
 
+		//Check SHA1 Digest
+		if len(dat) != 20 {
+			fmt.Println("Digest First")
+			return;
+		}
+
                 //Get Key
                 privTemplate := []*pkcs11.Attribute{
                         pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
@@ -493,13 +527,32 @@ func main() {
 
                 //Sign Data
                 if len(pvk) == 1 {
-                        err = p.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_ECDSA, nil)}, pvk[0])
+			err = p.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_ECDSA, nil)}, pvk[0])
                         check(err)
                         signed, err := p.Sign(session, dat)
                         check(err)
-                        dst := base64.StdEncoding.EncodeToString(signed)
-                        fmt.Println("----- Signature -----")
-                        fmt.Println(dst)
+			if *opensslSigFormat {
+				signedR := signed[:len(signed)/2]
+				signedS := signed[len(signed)/2:]
+
+				valueR := getRawValue(signedR)
+				valueS := getRawValue(signedS)
+
+				asn1SignedR, err := asn1.Marshal(valueR)
+				check(err)
+				asn1SignedS, err := asn1.Marshal(valueS)
+				check(err)
+
+				seqValue := asn1.RawValue{
+					Class: asn1.ClassUniversal,
+					Tag: asn1.TagSequence,
+					IsCompound: true,
+					Bytes: append(asn1SignedR, asn1SignedS...),
+				}
+				signed, err = asn1.Marshal(seqValue)
+				check(err)
+			}
+			fmt.Println(hex.EncodeToString(signed))
                 } else {
                         fmt.Println("Invalid Key Label")
                 }
@@ -526,12 +579,6 @@ func main() {
 			}
 			attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
 			check(err)
-			//modulus := make([]byte, 256)
-			//for i, b := range attr[0].Value {
-			//	modulus[255 - i] = b
-			//}
-			//a := big.NewInt(0).SetBytes(modulus)
-			//fmt.Println(a.BitLen())
 			rsaPub := &rsa.PublicKey{
 				N: big.NewInt(0).SetBytes(attr[0].Value),
 				E: 65537,
@@ -544,6 +591,96 @@ func main() {
 			}
 			err = pem.Encode(os.Stdout, block)
 			check(err)
+		} else {
+			fmt.Println("Invalid Key Label")
+		}
+	}
+
+	//--------------------------------------------------- Get ECDSA Public Key ------------------------------------------------
+	if *getPubEc && len(*labelName) > 0 {
+		pubTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+
+		err := p.FindObjectsInit(session, pubTemp)
+		check(err)
+		pbk, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
+
+		if len(pbk) > 0 {
+			attrTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_EC_POINT, nil),
+			}
+			attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
+			check(err)
+
+			curve := elliptic.P256()
+			data := attr[0].Value
+			byteLen := (curve.Params().BitSize + 7) / 8
+
+			ecPub := &ecdsa.PublicKey{
+				Curve: curve,
+				X: new(big.Int).SetBytes(data[3 : 3+byteLen]),
+				Y: new(big.Int).SetBytes(data[3+byteLen:]),
+			}
+			ecPubByte, err := x509.MarshalPKIXPublicKey(ecPub)
+			check(err)
+			block := &pem.Block{
+				Type: "PUBLIC KEY",
+				Bytes: ecPubByte,
+			}
+			err = pem.Encode(os.Stdout, block)
+			check(err)
+		} else {
+			fmt.Println("Invalid Key Label")
+		}
+	}
+
+	//------------------------------------------------ ECDSA Signature Verification ----------------------------------------------
+	if *verifyEc && len(*labelName) > 0 && len(*signData) > 0 && len(*sigFile) > 0 {
+		pubTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+
+		err := p.FindObjectsInit(session, pubTemp)
+		check(err)
+		pbk, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
+
+		if len(pbk) > 0 {
+			plain, err := ioutil.ReadFile(*signData)
+			check(err)
+
+			sign, err := ioutil.ReadFile(*sigFile)
+			check(err)
+
+			if *opensslSigFormat {
+				var raw asn1.RawValue
+				_, err = asn1.Unmarshal(sign, &raw)
+				check(err)
+
+				rLen := raw.Bytes[1]
+				r := getRS(raw.Bytes[2:2+rLen])
+				s := getRS(raw.Bytes[4+rLen:])
+
+				sign = append(r, s...)
+			}
+			err = p.VerifyInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_ECDSA, nil)}, pbk[0])
+			check(err)
+			err = p.Verify(session, plain, sign)
+			if err != nil {
+				fmt.Println("Verification Failure")
+			} else {
+				fmt.Println("Verification Success")
+			}
 		} else {
 			fmt.Println("Invalid Key Label")
 		}
