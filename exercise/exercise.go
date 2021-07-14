@@ -138,6 +138,8 @@ func main() {
 	verifyEc := pflag.Bool("verify-ec", false, "Verify signature by ECDSA key : --verify-ec --label (key label) --data (digested data) --sig (sig file)")
 	sigFile := pflag.String("sig", "", "Input signature file : --sig (signature file)")
 
+	unsafe := pflag.Bool("unsafe", false, "Generate rsa keypair with unsafe(exportable) priv")
+
 	pflag.Parse()
 
 	//------------------------------------------- Print Object List ------------------------------------------
@@ -244,12 +246,18 @@ func main() {
 			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
 			pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
 			pkcs11.NewAttribute(pkcs11.CKA_PRIVATE, true),
-			pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
 			pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
 			pkcs11.NewAttribute(pkcs11.CKA_DECRYPT, true),
 			pkcs11.NewAttribute(pkcs11.CKA_UNWRAP, true),
 			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
 			pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
+		}
+
+		if *unsafe {
+			rsaPrivkeyTemplate = append(rsaPrivkeyTemplate, pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, false))
+			rsaPrivkeyTemplate = append(rsaPrivkeyTemplate, pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, true))
+		} else {
+			rsaPrivkeyTemplate = append(rsaPrivkeyTemplate, pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true))
 		}
 
 		rsaPubkey, rsaPrivkey, err := p.GenerateKeyPair(session, mechTemplate, rsaPubkeyTemplate, rsaPrivkeyTemplate)
