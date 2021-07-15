@@ -129,7 +129,9 @@ func main() {
 
 	signEc := pflag.Bool("sign-ec", false, "Sign with ECDSA key : --sign-ec --label (key label) --data (sign filename)")
 
-	getPubRsa := pflag.Bool("getpub-rsa", false, "Get RSA public key : --getpub-rsa --label (key label)")
+	getRsa := pflag.Bool("get-rsa", false, "Get RSA key : --getpub-rsa --label (key label) --pub")
+	getPub := pflag.Bool("pub", false, "Get public key of keypair : --pub")
+	getPriv := pflag.Bool("priv", false, "Get private key of keypair : --priv")
 
 	getPubEc := pflag.Bool("getpub-ec", false, "Get ECDSA key : --getpub-ec --label (key label)")
 
@@ -566,41 +568,94 @@ func main() {
                 }
 	}
 
-	//------------------------------------------------ Get RSA Public Key ------------------------------------------------
-	if *getPubRsa && len(*labelName) > 0 {
-		pubTemp := []*pkcs11.Attribute{
-			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
-			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
-			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-		}
+	//------------------------------------------------ Get RSA Key ------------------------------------------------
+	if *getRsa && len(*labelName) > 0 {
+		if *getPub {
+			pubTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+			}
+	
+			err := p.FindObjectsInit(session, pubTemp)
+			check(err)
+			pbk, _, err := p.FindObjects(session, 1)
+			check(err)
+			err = p.FindObjectsFinal(session)
+			check(err)
 
-		err := p.FindObjectsInit(session, pubTemp)
-		check(err)
-		pbk, _, err := p.FindObjects(session, 1)
-		check(err)
-		err = p.FindObjectsFinal(session)
-		check(err)
+			if len(pbk) > 0 {
+				attrTemp := []*pkcs11.Attribute{
+					pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
+				}
+				attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
+				check(err)
+				rsaPub := &rsa.PublicKey{
+					N: big.NewInt(0).SetBytes(attr[0].Value),
+					E: 65537,
+				}
+				rsaPubByte, err := x509.MarshalPKIXPublicKey(rsaPub)
+				check(err)
+				block := &pem.Block{
+					Type: "PUBLIC KEY",
+					Bytes: rsaPubByte,
+				}
+				err = pem.Encode(os.Stdout, block)
+				check(err)
+			} else {
+				fmt.Println("Invalid Key Label")
+			}
+		} else if *getPriv {
+			privTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+				pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, false),
+				pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, true),
+			}
 
-		if len(pbk) > 0 {
-			attrTemp := []*pkcs11.Attribute{
-				pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
-			}
-			attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
+			err := p.FindObjectsInit(session, privTemp)
 			check(err)
-			rsaPub := &rsa.PublicKey{
-				N: big.NewInt(0).SetBytes(attr[0].Value),
-				E: 65537,
-			}
-			rsaPubByte, err := x509.MarshalPKIXPublicKey(rsaPub)
+			pvk, _, err := p.FindObjects(session, 1)
 			check(err)
-			block := &pem.Block{
-				Type: "PUBLIC KEY",
-				Bytes: rsaPubByte,
-			}
-			err = pem.Encode(os.Stdout, block)
+			err = p.FindObjectsFinal(session)
 			check(err)
+
+			if len(pvk) > 0 {
+				attrTemp := []*pkcs11.Attribute{
+					pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
+					pkcs11.NewAttribute(pkcs11.CKA_PRIVATE_EXPONENT, nil),
+					pkcs11.NewAttribute(pkcs11.CKA_PRIME_1, nil),
+					pkcs11.NewAttribute(pkcs11.CKA_PRIME_2, nil),
+				}
+				attr, err := p.GetAttributeValue(session, pvk[0], attrTemp)
+				check(err)
+				rsaPub := rsa.PublicKey{
+					N: big.NewInt(0).SetBytes(attr[0].Value),
+					E: 65537,
+				}
+				primes := []*big.Int{
+					big.NewInt(0).SetBytes(attr[2].Value),
+					big.NewInt(0).SetBytes(attr[3].Value),
+				}
+				rsaPriv := &rsa.PrivateKey{
+					PublicKey: rsaPub,
+					D: big.NewInt(0).SetBytes(attr[1].Value),
+					Primes: primes,
+				}
+				rsaPrivByte, err := x509.MarshalPKCS8PrivateKey(rsaPriv)
+				check(err)
+				block := &pem.Block{
+					Type: "PRIVATE KEY",
+					Bytes: rsaPrivByte,
+				}
+				err = pem.Encode(os.Stdout, block)
+				check(err)
+			} else {
+				fmt.Println("Unexportable key")
+			}
 		} else {
-			fmt.Println("Invalid Key Label")
+			fmt.Println("Specify key type")
 		}
 	}
 
