@@ -117,6 +117,9 @@ func main() {
 	signRsa := pflag.Bool("sign-rsa", false, "Sign with rsa key : --sign-rsa --labal (key label) --data (aign filename)")
 	signData := pflag.String("data", "", "Input data : --data (filename)")
 
+	encRsa := pflag.Bool("encrypt-rsa", false, "Encrypt with RSA public key - only RSA_OAEP_SHA1_MGF1 supported : --encrypt-rsa --label (key label) --in (plain file name) --out (cipher file name)")
+	decRsa := pflag.Bool("decrypt-rsa", false, "Decrypt with RSA private key : --decrypt-rsa --label (key label) --in (cipher file name) --out (plain file name)")
+
 	genAes := pflag.Bool("gen-aes", false, "Generate aes key : --gen-aes --label (key label) --id (id)")
 
 	encAes := pflag.Bool("encrypt-aes", false, "Encrypt with AES : --encrypt-aes --label (key label) --in (plain file name) --out (encrypt file name)")
@@ -135,7 +138,7 @@ func main() {
 
 	getPubEc := pflag.Bool("getpub-ec", false, "Get ECDSA key : --getpub-ec --label (key label)")
 
-	opensslSigFormat := pflag.Bool("sign-format-openssl", false, "Convert sign data to asn1.sequence : --sign-format-openssl")
+	opensslSigFormat := pflag.Bool("sign-format-openssl", false, "Convert sign data to asn1.sequence format : --sign-format-openssl")
 
 	verifyEc := pflag.Bool("verify-ec", false, "Verify signature by ECDSA key : --verify-ec --label (key label) --data (digested data) --sig (sig file)")
 	sigFile := pflag.String("sig", "", "Input signature file : --sig (signature file)")
@@ -144,7 +147,13 @@ func main() {
 
 	pflag.Parse()
 
-	//------------------------------------------- Print Object List ------------------------------------------
+	/*
+	 *
+	 *
+	 * Print Object List
+	 *
+	 *
+	 */
 	if *objList {
 	        if err := p.FindObjectsInit(session, nil); err != nil {
 	                log.Fatal(err)
@@ -223,6 +232,12 @@ func main() {
 		}
 	}
 
+	/*
+	 *
+	 * RSA Algorithm
+	 *
+	 *
+	 */
 	//--------------------------------------------- Generate Rsa Key -----------------------------------------------------
 	if *genRsa && len(*labelName) > 0 && *objId > 0 {
 		mechTemplate := []*pkcs11.Mechanism{
@@ -333,6 +348,188 @@ func main() {
 		}
 	}
 
+	//------------------------------------------------ Get RSA Key ------------------------------------------------
+	if *getRsa && len(*labelName) > 0 {
+		if *getPub {
+			pubTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+			}
+	
+			err := p.FindObjectsInit(session, pubTemp)
+			check(err)
+			pbk, _, err := p.FindObjects(session, 1)
+			check(err)
+			err = p.FindObjectsFinal(session)
+			check(err)
+
+			if len(pbk) > 0 {
+				attrTemp := []*pkcs11.Attribute{
+					pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
+				}
+				attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
+				check(err)
+				rsaPub := &rsa.PublicKey{
+					N: big.NewInt(0).SetBytes(attr[0].Value),
+					E: 65537,
+				}
+				rsaPubByte, err := x509.MarshalPKIXPublicKey(rsaPub)
+				check(err)
+				block := &pem.Block{
+					Type: "PUBLIC KEY",
+					Bytes: rsaPubByte,
+				}
+				err = pem.Encode(os.Stdout, block)
+				check(err)
+			} else {
+				fmt.Println("Invalid Key Label")
+			}
+		} else if *getPriv {
+			privTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+				pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, false),
+				pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, true),
+			}
+
+			err := p.FindObjectsInit(session, privTemp)
+			check(err)
+			pvk, _, err := p.FindObjects(session, 1)
+			check(err)
+			err = p.FindObjectsFinal(session)
+			check(err)
+
+			if len(pvk) > 0 {
+				attrTemp := []*pkcs11.Attribute{
+					pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
+					pkcs11.NewAttribute(pkcs11.CKA_PRIVATE_EXPONENT, nil),
+					pkcs11.NewAttribute(pkcs11.CKA_PRIME_1, nil),
+					pkcs11.NewAttribute(pkcs11.CKA_PRIME_2, nil),
+				}
+				attr, err := p.GetAttributeValue(session, pvk[0], attrTemp)
+				check(err)
+				rsaPub := rsa.PublicKey{
+					N: big.NewInt(0).SetBytes(attr[0].Value),
+					E: 65537,
+				}
+				primes := []*big.Int{
+					big.NewInt(0).SetBytes(attr[2].Value),
+					big.NewInt(0).SetBytes(attr[3].Value),
+				}
+				rsaPriv := &rsa.PrivateKey{
+					PublicKey: rsaPub,
+					D: big.NewInt(0).SetBytes(attr[1].Value),
+					Primes: primes,
+				}
+				rsaPrivByte, err := x509.MarshalPKCS8PrivateKey(rsaPriv)
+				check(err)
+				block := &pem.Block{
+					Type: "PRIVATE KEY",
+					Bytes: rsaPrivByte,
+				}
+				err = pem.Encode(os.Stdout, block)
+				check(err)
+			} else {
+				fmt.Println("Unexportable key")
+			}
+		} else {
+			fmt.Println("Specify key type")
+		}
+	}
+
+	//--------------------------------------------- Encrypt Data w/ RSA Key ---------------------------------------------
+	if *encRsa && len(*labelName) > 0 && len(*inFile) > 0 && len(*outFile) > 0 {
+		//Get AES key
+		pubkeyTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+		err := p.FindObjectsInit(session, pubkeyTemp)
+		check(err)
+		pbk, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
+
+		//Get INPUT file
+		dat, err := ioutil.ReadFile(*inFile)
+		check(err)
+
+		//Make Parameter
+		params := &pkcs11.OAEPParams{
+			HashAlg:	pkcs11.CKM_SHA_1,
+			MGF:		pkcs11.CKG_MGF1_SHA1,
+			SourceType:	pkcs11.CKZ_DATA_SPECIFIED,
+			SourceData: nil,
+		}
+		mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_OAEP, params)}
+
+		//Encrypt
+		err = p.EncryptInit(session, mech, pbk[0])
+		check(err)
+		encrypted, err := p.Encrypt(session, dat)
+		check(err)
+
+		//Release OUTPUT file
+		err = ioutil.WriteFile(*outFile, encrypted, 0644)
+		check(err)
+		fmt.Println("ENCRYPT DONE")
+	}
+
+	//--------------------------------------------- Decrypt Data w/ RSA Key ---------------------------------------------
+	if *decRsa && len(*labelName) > 0 && len(*inFile) > 0 && len(*outFile) > 0 {
+		//Get AES key
+		privkeyTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+		err := p.FindObjectsInit(session, privkeyTemp)
+		check(err)
+		pvk, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
+
+		if len(pvk) != 1 {
+			fmt.Println("Key Not Found")
+			return
+		}
+
+		//Get INPUT file
+		encrypted, err := ioutil.ReadFile(*inFile)
+		check(err)
+
+		//Mechanism
+		params := &pkcs11.OAEPParams{
+			HashAlg:	pkcs11.CKM_SHA_1,
+			MGF:		pkcs11.CKG_MGF1_SHA1,
+			SourceType:	pkcs11.CKZ_DATA_SPECIFIED,
+			SourceData:	nil,
+		}
+		mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_OAEP, params)}
+
+		//Decrypt
+		err = p.DecryptInit(session, mech, pvk[0])
+		check(err)
+		decrypted, err := p.Decrypt(session, encrypted)
+		check(err)
+
+		//Release OUTPUT file
+		err = ioutil.WriteFile(*outFile, decrypted, 0644)
+		check(err)
+		fmt.Println("DECRYPT DONE")
+	}
+
+	/*
+	 *
+	 * AES Algorithm
+	 *
+	 *
+	 */
 	//---------------------------------------------- Generate AES Key -------------------------------------------------
 	if *genAes && len(*labelName) > 0 && *objId > 0 {
 		seckeyTemplate := []*pkcs11.Attribute{
@@ -440,6 +637,13 @@ func main() {
 		fmt.Println("DECRYPT DONE")
 	}
 
+	/*
+	 *
+	 *
+	 * ECDSA Algorithm
+	 *
+	 *
+	 */
 	//------------------------------------------- Generate ECDSA key ------------------------------------------------------
 	if *genEc && len(*labelName) > 0 && len(*ecCurve) > 0 && *objId > 0 {
 		if *ecCurve == "secp256r1" {
@@ -566,97 +770,6 @@ func main() {
                 } else {
                         fmt.Println("Invalid Key Label")
                 }
-	}
-
-	//------------------------------------------------ Get RSA Key ------------------------------------------------
-	if *getRsa && len(*labelName) > 0 {
-		if *getPub {
-			pubTemp := []*pkcs11.Attribute{
-				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
-				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
-				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-			}
-	
-			err := p.FindObjectsInit(session, pubTemp)
-			check(err)
-			pbk, _, err := p.FindObjects(session, 1)
-			check(err)
-			err = p.FindObjectsFinal(session)
-			check(err)
-
-			if len(pbk) > 0 {
-				attrTemp := []*pkcs11.Attribute{
-					pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
-				}
-				attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
-				check(err)
-				rsaPub := &rsa.PublicKey{
-					N: big.NewInt(0).SetBytes(attr[0].Value),
-					E: 65537,
-				}
-				rsaPubByte, err := x509.MarshalPKIXPublicKey(rsaPub)
-				check(err)
-				block := &pem.Block{
-					Type: "PUBLIC KEY",
-					Bytes: rsaPubByte,
-				}
-				err = pem.Encode(os.Stdout, block)
-				check(err)
-			} else {
-				fmt.Println("Invalid Key Label")
-			}
-		} else if *getPriv {
-			privTemp := []*pkcs11.Attribute{
-				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
-				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
-				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-				pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, false),
-				pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, true),
-			}
-
-			err := p.FindObjectsInit(session, privTemp)
-			check(err)
-			pvk, _, err := p.FindObjects(session, 1)
-			check(err)
-			err = p.FindObjectsFinal(session)
-			check(err)
-
-			if len(pvk) > 0 {
-				attrTemp := []*pkcs11.Attribute{
-					pkcs11.NewAttribute(pkcs11.CKA_MODULUS, nil),
-					pkcs11.NewAttribute(pkcs11.CKA_PRIVATE_EXPONENT, nil),
-					pkcs11.NewAttribute(pkcs11.CKA_PRIME_1, nil),
-					pkcs11.NewAttribute(pkcs11.CKA_PRIME_2, nil),
-				}
-				attr, err := p.GetAttributeValue(session, pvk[0], attrTemp)
-				check(err)
-				rsaPub := rsa.PublicKey{
-					N: big.NewInt(0).SetBytes(attr[0].Value),
-					E: 65537,
-				}
-				primes := []*big.Int{
-					big.NewInt(0).SetBytes(attr[2].Value),
-					big.NewInt(0).SetBytes(attr[3].Value),
-				}
-				rsaPriv := &rsa.PrivateKey{
-					PublicKey: rsaPub,
-					D: big.NewInt(0).SetBytes(attr[1].Value),
-					Primes: primes,
-				}
-				rsaPrivByte, err := x509.MarshalPKCS8PrivateKey(rsaPriv)
-				check(err)
-				block := &pem.Block{
-					Type: "PRIVATE KEY",
-					Bytes: rsaPrivByte,
-				}
-				err = pem.Encode(os.Stdout, block)
-				check(err)
-			} else {
-				fmt.Println("Unexportable key")
-			}
-		} else {
-			fmt.Println("Specify key type")
-		}
 	}
 
 	//--------------------------------------------------- Get ECDSA Public Key ------------------------------------------------
