@@ -1,4 +1,6 @@
 # Summer2021-pkcs11-practice
+Clone coding of pkcs11-tool(OpenSC)  
+by GoLang + github.com/miekg/pkcs11
 
 ## PKCS#11 tool flag options
 ### Print object list option
