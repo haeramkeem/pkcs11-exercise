@@ -116,6 +116,7 @@ func main() {
 
 	signRsa := pflag.Bool("sign-rsa", false, "Sign with rsa key : --sign-rsa --labal (key label) --data (aign filename)")
 	signData := pflag.String("data", "", "Input data : --data (filename)")
+	signPSS := pflag.Bool("pss", false, "Sign with rsa key & PSS padding : --sign-rsa --pss --labal (key label) --data (aign filename)")
 
 	encRsa := pflag.Bool("encrypt-rsa", false, "Encrypt with RSA public key - only RSA_OAEP_SHA1_MGF1 supported : --encrypt-rsa --label (key label) --in (plain file name) --out (cipher file name)")
 	decRsa := pflag.Bool("decrypt-rsa", false, "Decrypt with RSA private key : --decrypt-rsa --label (key label) --in (cipher file name) --out (plain file name)")
@@ -337,7 +338,18 @@ func main() {
 
 		//Sign Data
 		if len(pvk) == 1 {
-			err = p.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_SHA1_RSA_PKCS, nil)}, pvk[0])
+			var mech []*pkcs11.Mechanism
+			if *signPSS {
+				if len(dat) != 32 {
+					fmt.Println("Digest first")
+					return
+				}
+				params := pkcs11.NewPSSParams(pkcs11.CKM_SHA256, pkcs11.CKG_MGF1_SHA256, 32)
+				mech = []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_PSS, params)}
+			} else {
+				mech = []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_SHA1_RSA_PKCS, nil)}
+			}
+			err = p.SignInit(session, mech, pvk[0])
 			check(err)
 			signed, err := p.Sign(session, dat)
 			check(err)
@@ -716,9 +728,9 @@ func main() {
 
 	//-------------------------------------------------- Sign w/ ECDSA ----------------------------------------------------
 	if *signEc && len(*labelName) > 0 && len(*signData) > 0 {
-                //Read File
-                dat, err := ioutil.ReadFile(*signData)
-                check(err)
+		//Read File
+		dat, err := ioutil.ReadFile(*signData)
+		check(err)
 
 		//Check SHA1 Digest
 		if len(dat) != 20 {
@@ -726,25 +738,25 @@ func main() {
 			return;
 		}
 
-                //Get Key
-                privTemplate := []*pkcs11.Attribute{
-                        pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
-                        pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
-                        pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-                }
-                err = p.FindObjectsInit(session, privTemplate)
-                check(err)
-                pvk, _, err := p.FindObjects(session, 1)
-                check(err)
-                err = p.FindObjectsFinal(session)
-                check(err)
+		//Get Key
+		privTemplate := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+		err = p.FindObjectsInit(session, privTemplate)
+		check(err)
+		pvk, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
 
-                //Sign Data
-                if len(pvk) == 1 {
+		//Sign Data
+		if len(pvk) == 1 {
 			err = p.SignInit(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_ECDSA, nil)}, pvk[0])
-                        check(err)
-                        signed, err := p.Sign(session, dat)
-                        check(err)
+			check(err)
+			signed, err := p.Sign(session, dat)
+			check(err)
 			if *opensslSigFormat {
 				signedR := signed[:len(signed)/2]
 				signedS := signed[len(signed)/2:]
@@ -767,9 +779,9 @@ func main() {
 				check(err)
 			}
 			fmt.Println(hex.EncodeToString(signed))
-                } else {
-                        fmt.Println("Invalid Key Label")
-                }
+		} else {
+				fmt.Println("Invalid Key Label")
+		}
 	}
 
 	//--------------------------------------------------- Get ECDSA Public Key ------------------------------------------------
