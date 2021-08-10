@@ -133,11 +133,11 @@ func main() {
 
 	signEc := pflag.Bool("sign-ec", false, "Sign with ECDSA key : --sign-ec --label (key label) --data (sign filename)")
 
-	getRsa := pflag.Bool("get-rsa", false, "Get RSA key : --getpub-rsa --label (key label) --pub")
+	getRsa := pflag.Bool("get-rsa", false, "Get RSA key : --get-rsa --label (key label) --pub")
 	getPub := pflag.Bool("pub", false, "Get public key of keypair : --pub")
 	getPriv := pflag.Bool("priv", false, "Get private key of keypair : --priv")
 
-	getPubEc := pflag.Bool("getpub-ec", false, "Get ECDSA key : --getpub-ec --label (key label)")
+	getEc := pflag.Bool("get-ec", false, "Get ECDSA key : --get-ec --label (key label) --pub")
 
 	opensslSigFormat := pflag.Bool("sign-format-openssl", false, "Convert sign data to asn1.sequence format : --sign-format-openssl")
 
@@ -438,7 +438,7 @@ func main() {
 				rsaPrivByte, err := x509.MarshalPKCS8PrivateKey(rsaPriv)
 				check(err)
 				block := &pem.Block{
-					Type: "PRIVATE KEY",
+					Type: "RSA PRIVATE KEY",
 					Bytes: rsaPrivByte,
 				}
 				err = pem.Encode(os.Stdout, block)
@@ -678,12 +678,18 @@ func main() {
 				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
 				pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
 				pkcs11.NewAttribute(pkcs11.CKA_PRIVATE, true),
-				pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
 				pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
 				pkcs11.NewAttribute(pkcs11.CKA_DERIVE, true),
 				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
 				pkcs11.NewAttribute(pkcs11.CKA_ID, *objId),
 				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
+			}
+
+			if *unsafe {
+				ecPrivTemp = append(ecPrivTemp, pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, false))
+				ecPrivTemp = append(ecPrivTemp, pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, true))
+			} else {
+				ecPrivTemp = append(ecPrivTemp, pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true))
 			}
 
 			pbk, pvk, err := p.GenerateKeyPair(session, []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_EC_KEY_PAIR_GEN, nil)}, ecPubTemp, ecPrivTemp)
@@ -705,15 +711,15 @@ func main() {
 			fmt.Printf("  KeyType : %s\n", ckkhex(binary.LittleEndian.Uint16(pubAttr[3].Value)))
 
 			var ksize int
-                        size := len(pubAttr[4].Value)
-                        if (size - 2) <= 127 {
-                                ksize = (size - 3) * 4
-                        } else if (size - 3) <= 255 {
-                                ksize = (size - 4) * 4
-                        } else {
-                                ksize = (size - 5) * 4
-                        }
-                        fmt.Println("  KeySize :", ksize)
+			size := len(pubAttr[4].Value)
+			if (size - 2) <= 127 {
+					ksize = (size - 3) * 4
+			} else if (size - 3) <= 255 {
+					ksize = (size - 4) * 4
+			} else {
+					ksize = (size - 5) * 4
+			}
+			fmt.Println("  KeySize :", ksize)
 
 			privAttr, err := p.GetAttributeValue(session, pvk, attrTemp)
 			check(err)
@@ -784,8 +790,8 @@ func main() {
 		}
 	}
 
-	//--------------------------------------------------- Get ECDSA Public Key ------------------------------------------------
-	if *getPubEc && len(*labelName) > 0 {
+	//--------------------------------------------------- Get ECDSA Key ------------------------------------------------
+	if *getEc && len(*labelName) > 0 {
 		pubTemp := []*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
 			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
@@ -799,22 +805,28 @@ func main() {
 		err = p.FindObjectsFinal(session)
 		check(err)
 
-		if len(pbk) > 0 {
-			attrTemp := []*pkcs11.Attribute{
-				pkcs11.NewAttribute(pkcs11.CKA_EC_POINT, nil),
-			}
-			attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
-			check(err)
+		if len(pbk) != 1 {
+			fmt.Println("Invalid Key Label")
+			return
+		}
+	
+		attrTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_EC_POINT, nil),
+		}
+		attr, err := p.GetAttributeValue(session, pbk[0], attrTemp)
+		check(err)
 
-			curve := elliptic.P256()
-			data := attr[0].Value
-			byteLen := (curve.Params().BitSize + 7) / 8
+		curve := elliptic.P256()
+		data := attr[0].Value
+		byteLen := (curve.Params().BitSize + 7) / 8
 
-			ecPub := &ecdsa.PublicKey{
-				Curve: curve,
-				X: new(big.Int).SetBytes(data[3 : 3+byteLen]),
-				Y: new(big.Int).SetBytes(data[3+byteLen:]),
-			}
+		ecPub := &ecdsa.PublicKey{
+			Curve: curve,
+			X: new(big.Int).SetBytes(data[3 : 3+byteLen]),
+			Y: new(big.Int).SetBytes(data[3+byteLen:]),
+		}
+
+		if *getPub {
 			ecPubByte, err := x509.MarshalPKIXPublicKey(ecPub)
 			check(err)
 			block := &pem.Block{
@@ -823,8 +835,46 @@ func main() {
 			}
 			err = pem.Encode(os.Stdout, block)
 			check(err)
-		} else {
-			fmt.Println("Invalid Key Label")
+		} else if *getPriv {
+			privTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
+				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_EC),
+				pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+				pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, false),
+				pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, true),
+			}
+	
+			err := p.FindObjectsInit(session, privTemp)
+			check(err)
+			pvk, _, err := p.FindObjects(session, 1)
+			check(err)
+			err = p.FindObjectsFinal(session)
+			check(err)
+
+			if len(pvk) != 1 {
+				fmt.Println("Invalid Key Label")
+				return
+			}
+	
+			attrTemp := []*pkcs11.Attribute{
+				pkcs11.NewAttribute(pkcs11.CKA_VALUE, nil),
+			}
+			attr, err := p.GetAttributeValue(session, pvk[0], attrTemp)
+			check(err)
+
+			ecPriv := &ecdsa.PrivateKey{
+				PublicKey: *ecPub,
+				D: new(big.Int).SetBytes(attr[0].Value),
+			}
+
+			ecPrivByte, err := x509.MarshalECPrivateKey(ecPriv)
+			check(err)
+			block := &pem.Block{
+				Type: "EC PRIVATE KEY",
+				Bytes: ecPrivByte,
+			}
+			err = pem.Encode(os.Stdout, block)
+			check(err)
 		}
 	}
 
