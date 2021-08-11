@@ -118,8 +118,10 @@ func main() {
 	signData := pflag.String("data", "", "Input data : --data (filename)")
 	signPSS := pflag.Bool("pss", false, "Sign with rsa key & PSS padding : --sign-rsa --pss --labal (key label) --data (aign filename)")
 
-	encRsa := pflag.Bool("encrypt-rsa", false, "Encrypt with RSA public key - only RSA_OAEP_SHA1_MGF1 supported : --encrypt-rsa --label (key label) --in (plain file name) --out (cipher file name)")
+	encRsa := pflag.Bool("encrypt-rsa", false, "Encrypt with RSA public key : --encrypt-rsa --label (key label) --in (plain file name) --out (cipher file name)")
 	decRsa := pflag.Bool("decrypt-rsa", false, "Decrypt with RSA private key : --decrypt-rsa --label (key label) --in (cipher file name) --out (plain file name)")
+	oaep := pflag.Bool("oaep", false, "Encrypt / decrypt with RSA_OAEP - only SHA1, MGF-SHA1 supported : --oaep")
+
 
 	genAes := pflag.Bool("gen-aes", false, "Generate aes key : --gen-aes --label (key label) --id (id)")
 
@@ -453,7 +455,7 @@ func main() {
 
 	//--------------------------------------------- Encrypt Data w/ RSA Key ---------------------------------------------
 	if *encRsa && len(*labelName) > 0 && len(*inFile) > 0 && len(*outFile) > 0 {
-		//Get AES key
+		//Get RSA key
 		pubkeyTemp := []*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
 			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
@@ -470,14 +472,20 @@ func main() {
 		dat, err := ioutil.ReadFile(*inFile)
 		check(err)
 
-		//Make Parameter
-		params := &pkcs11.OAEPParams{
-			HashAlg:	pkcs11.CKM_SHA_1,
-			MGF:		pkcs11.CKG_MGF1_SHA1,
-			SourceType:	pkcs11.CKZ_DATA_SPECIFIED,
-			SourceData: nil,
+		//Get mechanism
+		var mech []*pkcs11.Mechanism
+		if *oaep {
+			//Make Parameter
+			params := &pkcs11.OAEPParams{
+				HashAlg:	pkcs11.CKM_SHA_1,
+				MGF:		pkcs11.CKG_MGF1_SHA1,
+				SourceType:	pkcs11.CKZ_DATA_SPECIFIED,
+				SourceData: nil,
+			}
+			mech = []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_OAEP, params)}
+		} else {
+			mech = []*pkcs11.Mechanism{ pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS, nil) }
 		}
-		mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_OAEP, params)}
 
 		//Encrypt
 		err = p.EncryptInit(session, mech, pbk[0])
@@ -493,7 +501,7 @@ func main() {
 
 	//--------------------------------------------- Decrypt Data w/ RSA Key ---------------------------------------------
 	if *decRsa && len(*labelName) > 0 && len(*inFile) > 0 && len(*outFile) > 0 {
-		//Get AES key
+		//Get RSA key
 		privkeyTemp := []*pkcs11.Attribute{
 				pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PRIVATE_KEY),
 				pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_RSA),
@@ -515,14 +523,20 @@ func main() {
 		encrypted, err := ioutil.ReadFile(*inFile)
 		check(err)
 
-		//Mechanism
-		params := &pkcs11.OAEPParams{
-			HashAlg:	pkcs11.CKM_SHA_1,
-			MGF:		pkcs11.CKG_MGF1_SHA1,
-			SourceType:	pkcs11.CKZ_DATA_SPECIFIED,
-			SourceData:	nil,
+		//Get mechanism
+		var mech []*pkcs11.Mechanism
+		if *oaep {
+			//Make Parameter
+			params := &pkcs11.OAEPParams{
+				HashAlg:	pkcs11.CKM_SHA_1,
+				MGF:		pkcs11.CKG_MGF1_SHA1,
+				SourceType:	pkcs11.CKZ_DATA_SPECIFIED,
+				SourceData: nil,
+			}
+			mech = []*pkcs11.Mechanism{ pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_OAEP, params) }
+		} else {
+			mech = []*pkcs11.Mechanism{ pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS, nil) }
 		}
-		mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_OAEP, params)}
 
 		//Decrypt
 		err = p.DecryptInit(session, mech, pvk[0])
@@ -594,6 +608,8 @@ func main() {
 		err = p.FindObjectsFinal(session)
 		check(err)
 
+		if len(sck) != 1 { fmt.Println("Key not found"); return }
+
 		//Get INPUT file
 		dat, err := ioutil.ReadFile(*inFile)
 		check(err)
@@ -619,17 +635,17 @@ func main() {
 	//-------------------------------------------- Decrypt w/ AES --------------------------------------------------------
 	if *decAes && len(*labelName) > 0 && len(*inFile) > 0 && len(*outFile) > 0 {
 		//Get AES key
-                seckeyTemp := []*pkcs11.Attribute{
-                        pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_SECRET_KEY),
-                        pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_AES),
-                        pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
-                }
-                err := p.FindObjectsInit(session, seckeyTemp)
-                check(err)
-                sck, _, err := p.FindObjects(session, 1)
-                check(err)
-                err = p.FindObjectsFinal(session)
-                check(err)
+		seckeyTemp := []*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_SECRET_KEY),
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_AES),
+			pkcs11.NewAttribute(pkcs11.CKA_LABEL, *labelName),
+		}
+		err := p.FindObjectsInit(session, seckeyTemp)
+		check(err)
+		sck, _, err := p.FindObjects(session, 1)
+		check(err)
+		err = p.FindObjectsFinal(session)
+		check(err)
 
 		//Get INPUT file
 		encrypted, err := ioutil.ReadFile(*inFile)
