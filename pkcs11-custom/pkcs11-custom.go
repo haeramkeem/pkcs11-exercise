@@ -117,6 +117,7 @@ func main() {
 	signRsa := pflag.Bool("sign-rsa", false, "Sign with rsa key : --sign-rsa --labal (key label) --data (aign filename)")
 	signData := pflag.String("data", "", "Input data : --data (filename)")
 	signPSS := pflag.Bool("pss", false, "Sign with rsa key & PSS padding : --sign-rsa --pss --labal (key label) --data (aign filename)")
+	signSha1 := pflag.Bool("sign-sha1", false, "Sign sha1 digested data with keypair : --sign-sha1")
 
 	encRsa := pflag.Bool("encrypt-rsa", false, "Encrypt with RSA public key : --encrypt-rsa --label (key label) --in (plain file name) --out (cipher file name)")
 	decRsa := pflag.Bool("decrypt-rsa", false, "Decrypt with RSA private key : --decrypt-rsa --label (key label) --in (cipher file name) --out (plain file name)")
@@ -348,8 +349,14 @@ func main() {
 				}
 				params := pkcs11.NewPSSParams(pkcs11.CKM_SHA256, pkcs11.CKG_MGF1_SHA256, 32)
 				mech = []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS_PSS, params)}
-			} else {
+			} else if *signSha1 {
+				if len(dat) != 20 {
+					fmt.Println("Digest first")
+					return
+				}
 				mech = []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_SHA1_RSA_PKCS, nil)}
+			} else {
+				mech = []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_RSA_PKCS, nil)}
 			}
 			err = p.SignInit(session, mech, pvk[0])
 			check(err)
@@ -753,12 +760,6 @@ func main() {
 		//Read File
 		dat, err := ioutil.ReadFile(*signData)
 		check(err)
-
-		//Check SHA1 Digest
-		if len(dat) != 20 {
-			fmt.Println("Digest First")
-			return;
-		}
 
 		//Get Key
 		privTemplate := []*pkcs11.Attribute{
