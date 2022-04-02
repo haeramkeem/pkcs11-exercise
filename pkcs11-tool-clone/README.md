@@ -1,6 +1,9 @@
-# Summer2021-pkcs11-practice
-Clone coding of pkcs11-tool(OpenSC)  
-by GoLang + github.com/miekg/pkcs11
+# pkcs11-tool clone
+Clone coding of [OpenSC](https://github.com/OpenSC/OpenSC)/[pkcs11-tool](https://linux.die.net/man/1/pkcs11-tool)    
+by [GoLang](https://github.com/OpenSC/OpenSC) + [github.com/miekg/pkcs11](https://github.com/miekg/pkcs11)
+
+## Build
+- Just typing `go build` will build the clone version of pkcs-tool
 
 ## PKCS#11 tool flag options
 ### Print object list option
